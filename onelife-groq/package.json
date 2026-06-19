@@ -15,6 +15,7 @@
     "extends": ["react-app"],
     "rules": {
       "no-unused-vars": "off",
+      "no-unused-expressions": "off",
       "react-hooks/exhaustive-deps": "off"
     }
   },

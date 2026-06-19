@@ -370,10 +370,20 @@ function backtest(candles, dna, htf15) {
   const pnls=closed.map(t=>t.pnl); const mean=pnls.reduce((a,b)=>a+b,0)/(pnls.length||1);
   const std=Math.sqrt(pnls.reduce((a,b)=>a+(b-mean)**2,0)/(pnls.length||1))||1;
   const sharpe=mean/std;
-  let maxCL=0,cl=0; closed.forEach(t=>{t.result==="LOSS"?(cl++,maxCL=Math.max(maxCL,cl)):cl=0;});
+  let maxCL=0,cl=0;
+  closed.forEach(t=>{
+    if(t.result==="LOSS"){ cl++; maxCL=Math.max(maxCL,cl); }
+    else cl=0;
+  });
   const kzStats=buildKillZoneStats(trades);
   const sessionStats={london:{w:0,l:0,pnl:0},nyOpen:{w:0,l:0,pnl:0},nyAM:{w:0,l:0,pnl:0},nyPM:{w:0,l:0,pnl:0}};
-  closed.forEach(t=>{ const s=sessionStats[t.session]; if(s){ s.pnl+=t.pnl; t.result==="WIN"?s.w++:s.l++; } });
+  closed.forEach(t=>{
+    const s=sessionStats[t.session];
+    if(!s) return;
+    s.pnl+=t.pnl;
+    if(t.result==="WIN") s.w++;
+    else s.l++;
+  });
 
   return {trades,wins:wins.length,losses:losses.length,total:closed.length,
     totalPnl,winRate,avgWin,avgLoss,profitFactor,maxDD,sharpe,maxCL,kzStats,sessionStats};
