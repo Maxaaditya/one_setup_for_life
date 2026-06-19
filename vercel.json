@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "installCommand": "npm install --prefix onelife-groq",
+  "buildCommand": "npm run build --prefix onelife-groq",
+  "outputDirectory": "onelife-groq/build",
+  "framework": "create-react-app",
+  "rewrites": [
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

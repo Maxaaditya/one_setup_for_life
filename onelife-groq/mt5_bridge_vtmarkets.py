@@ -27,18 +27,18 @@ import MetaTrader5 as mt5
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import logging
+import os
 from datetime import datetime, timedelta
 
 # ══════════════════════════════════════════════════════
-#  ✏️  FILL THESE IN  —  your VT Markets details
+#  Credentials — set via environment variables or edit below
 # ══════════════════════════════════════════════════════
-ACCOUNT  = 1142752             # ← your VT Markets account number (integer)
-PASSWORD = "OUe&y6N0"             # ← your MT5 password
-SERVER   = "VTMarkets-Demo"             # ← e.g. "VTMarkets-Live" or "VTMarkets-Demo"
+ACCOUNT  = int(os.environ.get("MT5_ACCOUNT", "0") or "0")
+PASSWORD = os.environ.get("MT5_PASSWORD", "")
+SERVER   = os.environ.get("MT5_SERVER", "")
 
 # Symbol — the bot will auto-detect if you leave this blank
-# Common VT Markets NAS100 names: "NAS100", "NAS100+", "NASDAQ", "US100"
-SYMBOL   = "NAS100."             # ← leave blank to auto-detect, or paste exact name
+SYMBOL   = os.environ.get("MT5_SYMBOL", "")
 
 DEFAULT_LOT  = 0.1        # VT Markets minimum lot — keep this until strategy is proven
 MAGIC        = 20250619   # unique ID for this bot's trades
@@ -51,7 +51,7 @@ VT_NAS_CANDIDATES = ["NAS100", "NAS100+", "NASDAQ", "US100", "NAS100.cash",
                      "NASUSDm", "USTEC", "NDX", "NAS100m"]
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["*"])
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("VTMarkets-Bridge")
 
@@ -349,23 +349,28 @@ def history():
 #  MAIN
 # ══════════════════════════════════════════════════════
 if __name__ == "__main__":
+    import sys
+    # Windows cp1252 consoles crash on emoji in print(); logging handles UTF-8 fine.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     print("=" * 60)
     print("  ONE LIFE BOT v4.0 — VT Markets MT5 Bridge")
     print("=" * 60)
 
     if not ACCOUNT or not PASSWORD or not SERVER:
-        print("\n⚠️  Credentials not filled in.")
+        print("\n[WARN] Credentials not filled in.")
         print("   Edit this file and set ACCOUNT, PASSWORD, SERVER")
         print("   OR open MT5 manually and log in before running this.\n")
 
     if not connect():
-        print("\n❌ Could not connect to MT5.")
+        print("\n[ERR] Could not connect to MT5.")
         print("   1. Make sure MetaTrader 5 is installed and open")
         print("   2. Make sure you are logged in")
         print("   3. Fill in ACCOUNT / PASSWORD / SERVER at top of file\n")
         exit(1)
 
-    print(f"\n✅ Bridge running at http://localhost:5000")
+    print(f"\n[OK] Bridge running at http://localhost:5000")
     print(f"   Magic number: {MAGIC}")
     print(f"   Default lot:  {DEFAULT_LOT}")
     print("\n   Endpoints:")
@@ -375,6 +380,6 @@ if __name__ == "__main__":
     print("   POST /close_all  — close all bot positions")
     print("   GET  /positions  — open positions")
     print("   GET  /history    — last 30 days trade history")
-    print("\n⚠️  USE DEMO ACCOUNT UNTIL STRATEGY IS PROVEN PROFITABLE!\n")
+    print("\n[WARN] USE DEMO ACCOUNT UNTIL STRATEGY IS PROVEN PROFITABLE!\n")
 
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=False)

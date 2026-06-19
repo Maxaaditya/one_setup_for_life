@@ -46,10 +46,54 @@ const HIGH_IMPACT_KEYWORDS = ["fed","fomc","cpi","nfp","gdp","rate decision","pa
 //  STORAGE
 // ════════════════════════════════════════════════════════════════
 // Environment variables (from .env file)
-const GROQ_KEY    = process.env.REACT_APP_GROQ_KEY    || "";
+const GROQ_KEY      = process.env.REACT_APP_GROQ_KEY      || "";
 const POLYGON_KEY   = process.env.REACT_APP_POLYGON_KEY   || "";
 const TG_TOKEN      = process.env.REACT_APP_TG_TOKEN      || "";
 const TG_CHAT       = process.env.REACT_APP_TG_CHAT       || "";
+const MT5_BRIDGE    = process.env.REACT_APP_MT5_BRIDGE_URL || "";
+const IS_PROD       = process.env.NODE_ENV === "production";
+
+async function groqChat(body) {
+  if (IS_PROD) {
+    return fetch("/api/groq", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  }
+  if (!GROQ_KEY) throw new Error("Missing REACT_APP_GROQ_KEY in .env");
+  return fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${GROQ_KEY}` }, body: JSON.stringify(body),
+  });
+}
+
+async function polygonFetch(path) {
+  if (IS_PROD) {
+    return fetch(`/api/polygon?path=${encodeURIComponent(path)}`);
+  }
+  if (!POLYGON_KEY) throw new Error("Missing REACT_APP_POLYGON_KEY in .env");
+  const sep = path.includes("?") ? "&" : "?";
+  return fetch(`https://api.polygon.io${path}${sep}apiKey=${POLYGON_KEY}`);
+}
+
+async function telegramSend(botToken, chatId, message) {
+  if (IS_PROD) {
+    return fetch("/api/telegram", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: "HTML" }),
+    });
+  }
+  if (!botToken || !chatId) return { ok: false };
+  return fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: "HTML" }),
+  });
+}
+
+async function mt5Request(path, options = {}) {
+  const bridge = MT5_BRIDGE || "http://127.0.0.1:5000";
+  if (IS_PROD) {
+    const qs = new URLSearchParams({ path });
+    return fetch(`/api/mt5?${qs}`, options);
+  }
+  return fetch(`${bridge.replace(/\/$/, "")}/${path.replace(/^\//, "")}`, options);
+}
 
 const store = {
   save:  async v => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(v)); } catch {} },
@@ -389,12 +433,12 @@ Identify patterns in top performers. Note which sessions are profitable vs losin
 Respond ONLY with valid JSON (no markdown):
 {"insight":"<2 sentences>","recommend":"<1 sentence>","forceMutateGenes":["gene1"],"diversityInjection":<bool>,"sessionAdvice":"<which session to focus on>","confidence":<1-10>}`;
 
-  const resp=await fetch("https://api.groq.com/openai/v1/chat/completions",{
-    method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${GROQ_KEY}`},
-    body:JSON.stringify({model:"llama-3.1-70b-versatile",max_tokens:700,messages:[{role:"user",content:prompt}]})
-  });
+  const resp=await groqChat({model:"llama-3.3-70b-versatile",max_tokens:700,messages:[{role:"user",content:prompt}]});
   const data=await resp.json();
-  const txt=(data.choices?.[0]?.message?.content||"").replace(/```json|```/g,"").trim(); return JSON.parse(txt);
+  if(!resp.ok) throw new Error(data.error?.message||`Groq API error ${resp.status}`);
+  const txt=(data.choices?.[0]?.message?.content||"").replace(/```json|```/g,"").trim();
+  try { return JSON.parse(txt); }
+  catch { return {insight:"AI returned non-JSON response",recommend:"Continue standard evolution",forceMutateGenes:[],diversityInjection:false,sessionAdvice:"nyOpen",confidence:5}; }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -403,9 +447,7 @@ Respond ONLY with valid JSON (no markdown):
 async function sendTelegram(botToken, chatId, message) {
   if(!botToken||!chatId) return false;
   try {
-    const url=`https://api.telegram.org/bot${botToken}/sendMessage`;
-    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({chat_id:chatId,text:message,parse_mode:"HTML"})});
+    const r=await telegramSend(botToken,chatId,message);
     return r.ok;
   } catch { return false; }
 }
@@ -436,17 +478,17 @@ ${signal.hasEQH?"🎯 Equal highs nearby":""}
 async function fetchPolygon(ticker, apiKey, days=5) {
   const to=new Date().toISOString().split("T")[0];
   const from=new Date(Date.now()-days*864e5).toISOString().split("T")[0];
-  const url=`https://api.polygon.io/v2/aggs/ticker/${ticker}/range/1/minute/${from}/${to}?adjusted=true&sort=asc&limit=500&apiKey=${apiKey}`;
-  const r=await fetch(url); const d=await r.json();
+  const path=`/v2/aggs/ticker/${ticker}/range/1/minute/${from}/${to}?adjusted=true&sort=asc&limit=500`;
+  if(!IS_PROD&&!apiKey) throw new Error("Missing Polygon API key");
+  const r=await polygonFetch(path); const d=await r.json();
   if(!d.results?.length) throw new Error(d.message||"No data returned");
   return d.results.map((b,i)=>({open:b.o,close:b.c,high:b.h,low:b.l,volume:b.v,index:i,ts:b.t,session:getSessionForBar(i,d.results.length)}));
 }
 
 async function checkNewsBlock(apiKey) {
-  if(!apiKey) return false;
+  if(!IS_PROD&&!apiKey) return false;
   try {
-    const url=`https://api.polygon.io/v2/reference/news?limit=10&apiKey=${apiKey}`;
-    const r=await fetch(url); const d=await r.json();
+    const r=await polygonFetch("/v2/reference/news?limit=10"); const d=await r.json();
     const now=Date.now();
     return (d.results||[]).some(n=>{
       const age=now-new Date(n.published_utc).getTime();
@@ -719,10 +761,19 @@ function SectionHeader({title}) {
 // ════════════════════════════════════════════════════════════════
 //  MAIN APP
 // ════════════════════════════════════════════════════════════════
+let _initialMarket;
+function getInitialMarket() {
+  if (!_initialMarket) {
+    const c = genCandles(500);
+    _initialMarket = { candles: c, htf15: buildHTF(c) };
+  }
+  return _initialMarket;
+}
+
 export default function App() {
-  // Data
-  const [candles,    setCan]     = useState(()=>genCandles(500));
-  const [htf15,      setHtf15]   = useState(()=>buildHTF(genCandles(500)));
+  // Data — share one candle set so HTF aligns with chart on first render
+  const [candles,    setCan]     = useState(()=>getInitialMarket().candles);
+  const [htf15,      setHtf15]   = useState(()=>getInitialMarket().htf15);
   const [signals,    setSigs]    = useState([]);
   const [showPD,     setShowPD]  = useState(true);
 
@@ -741,6 +792,8 @@ export default function App() {
   const [ticker,     setTicker]  = useState("I:NDX");
   const [newsBlock,  setNewsBlock]=useState(false);
   const [feedStatus, setFS]      = useState("idle");
+  const [mt5Status, setMt5Status]=useState(null);
+  const [mt5Loading, setMt5Load] =useState(false);
 
   // Telegram
   const [tgToken,    setTgToken] = useState(TG_TOKEN);
@@ -774,6 +827,18 @@ export default function App() {
     setAlerts(a=>[{id,msg,type},...a.slice(0,4)]);
     setTimeout(()=>setAlerts(a=>a.filter(x=>x.id!==id)),6000);
   },[]);
+
+  const pingMt5=useCallback(async()=>{
+    setMt5Load(true);
+    try {
+      const r=await mt5Request("ping");
+      const d=await r.json();
+      setMt5Status(d);
+      if(d.status==="connected") addLog(`🔌 MT5 connected — ${d.symbol} @ ${d.bid}`,"#4ade80");
+      else addLog(`🔌 MT5: ${d.error||d.status}`,"#f87171");
+    } catch(e){ setMt5Status({status:"error",error:e.message}); addLog(`MT5: ${e.message}`,"#f87171"); }
+    finally{ setMt5Load(false); }
+  },[addLog]);
 
   // ── Load saved state ──────────────────────────────────────────
   useEffect(()=>{
@@ -882,7 +947,7 @@ export default function App() {
   useEffect(()=>{
     if(!isLive){clearInterval(liveRef.current);return;}
     liveRef.current=setInterval(async()=>{
-      if(dataMode==="polygon"&&apiKey){
+      if(dataMode==="polygon"&&(apiKey||IS_PROD)){
         try {
           const live=await fetchPolygon(ticker,apiKey,3);
           setCan(live); setHtf15(buildHTF(live)); setFS("live");
@@ -1146,10 +1211,13 @@ export default function App() {
           <Tag label={feedStatus==="live"?"● LIVE":feedStatus==="sim"?"● SIM":feedStatus==="error"?"● ERR":"● IDLE"} color={feedStatus==="live"?"#4ade80":feedStatus==="error"?"#f87171":"#334155"}/>
         </div>
         {dataMode==="polygon"&&<div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {!IS_PROD&&<>
           <div>
             <div style={{fontSize:7,color:"#0d2235",marginBottom:2}}>POLYGON.IO API KEY</div>
             <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="sk_…" style={{background:"#020b16",border:"1px solid #071525",color:"#b8cfe8",padding:"4px 8px",borderRadius:4,fontSize:9,fontFamily:"monospace",width:"100%",boxSizing:"border-box"}}/>
           </div>
+          </>}
+          {IS_PROD&&<div style={{fontSize:8,color:"#4ade80",marginBottom:4}}>● Polygon key loaded from server (Vercel env)</div>}
           <div>
             <div style={{fontSize:7,color:"#0d2235",marginBottom:2}}>TICKER</div>
             <input value={ticker} onChange={e=>setTicker(e.target.value)} style={{background:"#020b16",border:"1px solid #071525",color:"#b8cfe8",padding:"4px 8px",borderRadius:4,fontSize:9,fontFamily:"monospace",width:130}}/>
@@ -1159,6 +1227,22 @@ export default function App() {
         {dataMode==="sim"&&<div style={{background:"#020b16",border:"1px solid #071525",borderRadius:4,padding:"8px 10px",fontSize:8,color:"#0d2235",lineHeight:1.8}}>
           500 bars · Regime-aware trends · Session-stamped candles · HTF 15-min auto-built · Spread + slippage vary by session
         </div>}
+        <div style={{marginTop:12,paddingTop:10,borderTop:"1px solid #071525"}}>
+          <SectionHeader title="MT5 BRIDGE (VT MARKETS)"/>
+          <div style={{fontSize:8,color:"#0d2235",lineHeight:1.8,marginBottom:8}}>
+            {IS_PROD
+              ? "Run mt5_bridge_vtmarkets.py on your PC with MT5 open, expose via ngrok, then set MT5_BRIDGE_URL in Vercel env vars."
+              : "Run python mt5_bridge_vtmarkets.py locally (port 5000) while MT5 is open on your machine."}
+          </div>
+          <Btn onClick={pingMt5} disabled={mt5Loading} col="#4ade80" bg="#0f2e1a" sm>
+            {mt5Loading?"Checking…":"🔌 Ping MT5 Bridge"}
+          </Btn>
+          {mt5Status&&<div style={{marginTop:8,background:"#020b16",border:`1px solid ${mt5Status.status==="connected"?"#166534":"#7f1d1d"}`,borderRadius:4,padding:"6px 10px",fontSize:8,color:mt5Status.status==="connected"?"#4ade80":"#f87171",lineHeight:1.9}}>
+            {mt5Status.status==="connected"
+              ? <>Connected · {mt5Status.account_type} · Balance: {mt5Status.balance} {mt5Status.currency}<br/>{mt5Status.symbol} Bid: {mt5Status.bid} Ask: {mt5Status.ask}</>
+              : <>Status: {mt5Status.status||"error"} · {mt5Status.error||mt5Status.hint||"Bridge unreachable"}</>}
+          </div>}
+        </div>
       </Card>}
 
       {/* ── TAB: TELEGRAM ── */}

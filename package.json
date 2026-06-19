@@ -1,0 +1,9 @@
+{
+  "name": "one-setup-for-life",
+  "version": "4.0.0",
+  "private": true,
+  "scripts": {
+    "build": "npm run build --prefix onelife-groq",
+    "start": "npm start --prefix onelife-groq"
+  }
+}
