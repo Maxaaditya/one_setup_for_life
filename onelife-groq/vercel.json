@@ -6,7 +6,7 @@
   "framework": "create-react-app",
   "rewrites": [
     {
-      "source": "/((?!api/).*)",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]
